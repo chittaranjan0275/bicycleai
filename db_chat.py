@@ -5,6 +5,8 @@ from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import create_sql_agent
 from langchain_openai import ChatOpenAI
 import os
+import glob
+import shutil
 
 def load_csvs_to_db(csv_paths: List[str], db_path: str) -> List[str]:
     """
@@ -31,23 +33,40 @@ def load_csvs_to_db(csv_paths: List[str], db_path: str) -> List[str]:
     
     for csv_path in csv_paths:
         try:
-            # Read CSV
-            df = pd.read_csv(csv_path)
+            # Read CSV with error handling
+            df = pd.read_csv(csv_path, encoding='utf-8')
             
-            # Generate table name from file name
+            # Clean table name: remove special characters and spaces
             table_name = os.path.splitext(os.path.basename(csv_path))[0].lower()
+            table_name = ''.join(e for e in table_name if e.isalnum() or e == '_')
             
-            # Load to database
-            df.to_sql(table_name, engine, if_exists='replace', index=False)
+            # Verify DataFrame is not empty
+            if df.empty:
+                print(f"Warning: {csv_path} is empty, skipping...")
+                continue
+                
+            # Clean column names
+            df.columns = [c.lower().replace(' ', '_') for c in df.columns]
+            
+            # Load to database with transaction
+            with engine.begin() as connection:
+                df.to_sql(table_name, connection, if_exists='replace', index=False)
+            
             table_names.append(table_name)
             
             print(f"Successfully loaded {csv_path} into table '{table_name}'")
             print(f"Columns: {', '.join(df.columns)}")
             print(f"Rows: {len(df)}\n")
             
+        except pd.errors.EmptyDataError:
+            print(f"Error: {csv_path} is empty or has no valid data\n")
+        except pd.errors.ParserError:
+            print(f"Error: Could not parse {csv_path}. Please check if it's a valid CSV file\n")
         except Exception as e:
             print(f"Error loading {csv_path}: {str(e)}\n")
+            continue
     
+    engine.dispose()  # Properly close the database connection
     return table_names
 
 async def chat_with_data(db_path: str, query: str):
@@ -70,46 +89,31 @@ async def chat_with_data(db_path: str, query: str):
 async def main():
     print("Welcome to the Database Chat Interface!")
     
-    while True:
-        # Get database path
-        db_path = input("\nEnter the path for the SQLite database (e.g., my_data.db): ")
-        
-        # Add .db extension if missing
-        if not db_path.endswith('.db'):
-            db_path = db_path + '.db'
-        
-        # Create directory if it doesn't exist
-        db_dir = os.path.dirname(db_path)
-        if db_dir and not os.path.exists(db_dir):
-            try:
-                os.makedirs(db_dir)
-            except Exception as e:
-                print(f"Error creating directory: {str(e)}")
-                continue
-        
-        # Verify if path is writable
-        try:
-            with open(db_path, 'a'):  # Try to open file for writing
-                pass
-            break
-        except Exception as e:
-            print(f"Error: Cannot write to database path: {str(e)}")
-            print("Please try a different path")
+    # Set database path to current working directory
+    db_name = "aviation_test.db"
+    db_path = os.path.join(os.getcwd(), db_name)
     
-    # Get CSV files
-    csv_paths = []
-    while True:
-        path = input("\nEnter path to a CSV file (or 'done' to finish): ")
-        if path.lower() == 'done':
-            break
-        if os.path.exists(path):
-            csv_paths.append(path)
-        else:
-            print(f"File not found: {path}")
+    # Delete existing database if it exists
+    if os.path.exists(db_path):
+        print(f"\nRemoving existing database: {db_path}")
+        try:
+            os.remove(db_path)
+        except Exception as e:
+            print(f"Error removing existing database: {str(e)}")
+            return
+    
+    # Find all cleaned CSV files in current directory
+    csv_paths = glob.glob(os.path.join(os.getcwd(), "*_cleaned.csv"))
     
     if not csv_paths:
-        print("No valid CSV files provided.")
+        print("No cleaned CSV files found in current directory.")
+        print("Please ensure files end with '_cleaned.csv'")
         return
+    
+    # Print found files
+    print("\nFound the following cleaned CSV files:")
+    for path in csv_paths:
+        print(f"- {os.path.basename(path)}")
     
     # Load CSVs into database
     print("\nLoading CSV files into database...")
@@ -119,15 +123,18 @@ async def main():
         print("No tables were created. Exiting.")
         return
     
-    # Print available tables
-    print("\nAvailable tables in database:")
+    # Print database info
+    print(f"\nDatabase created at: {db_path}")
+    print("\nTables created in database:")
     for table in table_names:
         print(f"- {table}")
     
     # Start chat interface
     print("\nChat Interface Ready!")
-    print("Type 'exit' to quit")
-    print("Type 'tables' to see available tables")
+    print("Available commands:")
+    print("- 'exit': Quit the application")
+    print("- 'tables': Show available tables")
+    print("- 'schema': Show table schemas")
     
     while True:
         query = input("\nAsk a question about your data: ")
@@ -139,6 +146,18 @@ async def main():
             print("\nAvailable tables:")
             for table in table_names:
                 print(f"- {table}")
+            continue
+        
+        if query.lower() == 'schema':
+            try:
+                # Get schema for each table
+                db = SQLDatabase.from_uri(f"sqlite:///{db_path}")
+                for table in table_names:
+                    schema = db.get_table_info(table)
+                    print(f"\nSchema for {table}:")
+                    print(schema)
+            except Exception as e:
+                print(f"Error getting schema: {str(e)}")
             continue
         
         try:

@@ -31,8 +31,8 @@ def csv_input(state: GraphState) -> GraphState:
         if not os.path.exists(state['csv_path']):
             raise FileNotFoundError(f"CSV file not found at path: {state['csv_path']}")
 
-        # data = pd.read_csv(state['csv_path'])
-        data = pd.read_csv(state['csv_path'], nrows=20)
+        data = pd.read_csv(state['csv_path'])
+        # data = pd.read_csv(state['csv_path'], nrows=20)
 
         state['data'] = {'original': data, 'current': data.copy()}
         state['messages'].append(AIMessage(content=f"Data loaded successfully from {state['csv_path']}"))
@@ -315,7 +315,7 @@ def create_data_cleaning_graph() -> Graph:
 
 async def main(csv_path: str):
     """
-    Run the data cleaning workflow and launch db_chat.py after completion.
+    Run the data cleaning workflow for a single file.
     """
     # Create and compile the graph
     graph = create_data_cleaning_graph()
@@ -341,11 +341,38 @@ async def main(csv_path: str):
         print(message.content)
         print("-" * 40)
 
-    if final_state['cleaned']:
-        print("\nCleaning completed! Launching database chat interface...")
+    return final_state['cleaned']
+
+if __name__ == "__main__":
+    import sys
+    import asyncio
+
+    # Default file paths
+    default_files = [
+        "/home/spartan/Desktop/bicycleai/Flight Bookings.csv",
+        "/home/spartan/Desktop/bicycleai/Airline ID to Name.csv"
+    ]
+
+    # Use command line arguments or default to sample paths
+    if len(sys.argv) > 2:
+        file_paths = [sys.argv[1], sys.argv[2]]
+    else:
+        print("No files provided as arguments. Using default file paths:")
+        print(f"File 1: {default_files[0]}")
+        print(f"File 2: {default_files[1]}")
+        file_paths = default_files
+
+    # Process all files and track success
+    all_files_cleaned = True
+    for csv_path in file_paths:
+        print(f"\nProcessing file: {csv_path}")
+        cleaned = asyncio.run(main(csv_path))
+        all_files_cleaned = all_files_cleaned and cleaned
+
+    # Launch db_chat.py only after all files are cleaned
+    if all_files_cleaned:
+        print("\nAll files cleaned! Launching database chat interface...")
         print("-" * 40)
-        
-        # Launch db_chat.py as a separate process
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             db_chat_path = os.path.join(script_dir, 'db_chat.py')
@@ -354,20 +381,5 @@ async def main(csv_path: str):
             print(f"Error launching database chat interface: {str(e)}")
         except Exception as e:
             print(f"Unexpected error: {str(e)}")
-
-# if __name__ == "__main__":
-#     import sys
-#     import asyncio
-
-#     csv_path = "/home/spartan/Desktop/bicycleai/Flight Bookings.csv"
-#     asyncio.run(main(csv_path))
-
-
-
-if __name__ == "__main__":
-    import sys
-    import asyncio
-
-    # Use command line argument or default to a sample path
-    csv_path = sys.argv[1] if len(sys.argv) > 1 else "/home/spartan/Desktop/bicycleai/Flight Bookings.csv"
-    asyncio.run(main(csv_path))
+    else:
+        print("\nSome files were not cleaned successfully. Skipping database chat launch.")

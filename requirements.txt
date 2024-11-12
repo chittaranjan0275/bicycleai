@@ -215,7 +215,7 @@ openpyxl==3.1.5
 orjson==3.10.11
 outcome==1.2.0
 overrides==7.3.1
-packaging==24.1
+packaging==23.2
 pandas==1.5.3
 pandocfilters==1.5.0
 paramiko==2.9.3
